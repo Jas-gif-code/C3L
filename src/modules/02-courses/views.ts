@@ -19,6 +19,8 @@ export type Course = {
     title: string
     description: string
     capacity: number
+    startDate: string     
+    section: string 
     enrollments: string[]          // student ids — empty for a new course
     instructorId: string | null    // null = no instructor assigned yet
     archived: boolean              // false = active, true = hidden from catalogs
@@ -39,6 +41,8 @@ export type CourseFormInput = {
     title: string
     description: string
     capacity: number
+    startDate: string 
+    section: string
 }
 
 // Shared page shell. Every other builder calls this so the <html>, <head> and
@@ -80,6 +84,7 @@ export function dashboardPage(base: string, courses: Course[], showArchived = fa
         <p>Enrolled: ${c.enrollments.length} / ${c.capacity}</p>
         <p>${escapeHtml(c.description)}</p>
         <p>Capacity: ${c.capacity}</p>
+        <p>Section: ${escapeHtml(c.section)} · Starts: ${escapeHtml(c.startDate)}</p>
         <a href="${base}/${c.id}/edit">Edit Course</a>
         <form method="POST" action="${base}/${c.id}/${archiveAction}" class="inline-form">
           <button type="submit">${archiveLabel}</button>
@@ -139,6 +144,8 @@ export function createPage(base: string): string {
         <label>Course Title<br /><input type="text" name="title" required /></label>
         <label>Description<br /><textarea name="description" required></textarea></label>
         <label>Capacity<br /><input type="number" name="capacity" value="30" min="1" required /></label>
+        <label>Start Date<br /><input type="date" name="startDate" required /></label>
+        <label>Section<br /><input type="text" name="section" value="Section A" required /></label>
         <button type="submit">Save Course</button>
       </form>
       <p><a href="${base}">Back</a></p>
@@ -186,6 +193,8 @@ export function editPage(base: string, course: Course, instructors: Instructor[]
         <label>Course Title<br /><input type="text" name="title" value="${escapeHtml(course.title)}" required /></label>
         <label>Description<br /><textarea name="description" required>${escapeHtml(course.description)}</textarea></label>
         <label>Capacity<br /><input type="number" name="capacity" value="${course.capacity}" min="1" required /></label>
+        <label>Start Date<br /><input type="date" name="startDate" value="${escapeHtml(course.startDate)}" required /></label>
+        <label>Section<br /><input type="text" name="section" value="${escapeHtml(course.section)}" required /></label>
         <button type="submit">Update Course</button>
       </form>
       ${instructorPicker(base, course, instructors)}
