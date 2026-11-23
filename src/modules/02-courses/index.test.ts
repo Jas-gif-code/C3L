@@ -8,6 +8,25 @@
 import { expect, test } from 'bun:test'
 import mod from './index'
 
+import { beforeEach } from 'bun:test'
+import { db } from './db/database'
+
+// SQLite persists to disk, unlike the old in-memory array. Without this reset,
+// test 1's archive call pollutes test 14's expectations.
+beforeEach(() => {
+  db.exec('DELETE FROM enrollments; DELETE FROM courses;')
+  
+  db.prepare(`
+    INSERT INTO courses (id, code, title, description, capacity, startDate, section, instructorId, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('1', 'PROG2020', 'Advanced Software Development Tools', 'Learning Git, Bun, and web development.', 30, '2026-01-10', 'Section A', null, 0)
+  
+  db.prepare(`
+    INSERT INTO courses (id, code, title, description, capacity, startDate, section, instructorId, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run('2', 'CSCN72030', 'System Architecture', 'Designing backend systems and APIs.', 35, '2026-01-10', 'Section B', null, 0)
+})
+
 // Shortcut so I don't have to write the full Request each time.
 // Reminder: inside the tests, routes start at "/" - the /02-courses part is
 // added by the main app, so we don't include it here.
@@ -120,7 +139,7 @@ test('Edit page form has every course field, so saving it keeps them', async () 
     // only look at the first form (the course form), not the instructor picker
     const courseForm = html.split('</form>')[0] ?? ''
 
-    for (const name of ['code', 'title', 'description', 'capacity']) {
+    for (const name of ['code', 'title', 'description', 'capacity', 'startDate', 'section']) {
         expect(courseForm).toContain(`name="${name}"`)
     }
 

@@ -2,19 +2,11 @@
 // The "brain" of module 2. It holds the course data and defines every route.
 // All the HTML is in views.ts, all the CSS is in styles.ts - this file just
 // wires them together with the data.
-//
-// Scope from the project brief:
-//   - Create courses                  (done)
-//   - Edit course information          (done)
-//   - Course settings                  (only capacity so far, will extend later)
-//   - Course catalog                   (done)
-//   - Student enrollment               (done)
-//   - Instructor assignment to courses (done)
-//   - Archive active/inactive courses  (done)
+// Sprint 3 update: we swapped the plain array for a SQLite database! 
 
 import { Elysia } from 'elysia'
 import { defineModule, moduleBase } from '../../core/defineModule'
-import { docsPage } from './docsPage'
+import { db } from './db/database'
 import {
   catalogPage,
   createPage,
@@ -24,106 +16,119 @@ import {
   successPage,
   enrollPage,
   type Course,
-  type CourseFormInput,    // new  
+  type CourseFormInput,
   type Instructor,
 } from './views'
+import { docsPage } from './docsPage'
 
-// Where module 2 is mounted, e.g. "/02-courses".
-// I use this everywhere I need to build a link so nothing is hardcoded.
 const base = moduleBase(import.meta.dir)
 
-// ---- Data ----
-// The course list is just an array in memory. It survives across requests
-// while the server is running, but resets every time I restart `bun run dev`.
-// That's fine for learning, obviously a real app would use a database.
-
-const courses: Course[] = [
-    {
-        id: '1',
-        code: 'PROG2020',
-        title: 'Advanced Software Development Tools',
-        description: 'Learning Git, Bun, and web development.',
-        capacity: 30,
-        enrollments: [],
-        instructorId: null,
-        archived: false,
-    },
-    {
-        id: '2',
-        code: 'CSCN72030',
-        title: 'System Architecture',
-        description: 'Designing backend systems and APIs.',
-        capacity: 35,
-        enrollments: [],
-        instructorId: null,
-        archived: false,
-    },
-]
-
-// People who can be assigned to a course. Module 1 owns the real accounts and
-// roles, and I'm not allowed to edit it, so for now this is a small fixed list.
-// Later this could be fetched from module 1's users with the "instructor" role.
+// Instructors are still just a hardcoded array for now. 
+// Module 1 is supposed to have the real user accounts, but we haven't hooked 
+// their API up to ours yet. That's a problem for future Jas.
 const instructors: Instructor[] = [
-    { id: 'inst-1', name: 'Dr. Ada Lovelace' },
-    { id: 'inst-2', name: 'Prof. Alan Turing' },
-    { id: 'inst-3', name: 'Prof. Grace Hopper' },
+  { id: 'inst-1', name: 'Dr. Ada Lovelace' },
+  { id: 'inst-2', name: 'Prof. Alan Turing' },
+  { id: 'inst-3', name: 'Prof. Grace Hopper' },
 ]
 
-// Small helpers so I don't write the same find/loop everywhere.
+// ---- Database Helper Stuff ----
 
-const findCourse = (id: string): Course | undefined =>
-    courses.find((c) => c.id === id)
-
-const findInstructor = (id: string): Instructor | undefined =>
-    instructors.find((i) => i.id === id)
-
-// Sets (or clears) the instructor on a course.
-//   - instructorId === null  -> unassign
-//   - unknown instructor id  -> 'invalid-instructor', nothing changes
-//   - unknown course id      -> 'not-found'
-// Returning a small status string keeps the route below easy to read.
-function assignInstructor(
-    courseId: string,
-    instructorId: string | null,
-): 'ok' | 'not-found' | 'invalid-instructor' {
-    const course = findCourse(courseId)
-    if (!course) return 'not-found'
-    if (instructorId !== null && !findInstructor(instructorId)) return 'invalid-instructor'
-    course.instructorId = instructorId
-    return 'ok'
+// SQLite is a bit annoying. It stores booleans as 0/1 and it doesn't know what 
+// an array is. So the data coming OUT of the DB doesn't exactly match our `Course` type.
+// I made this type to represent the raw ugly row.
+type CourseRow = {
+  id: string
+  code: string
+  title: string
+  description: string
+  capacity: number
+  startDate: string
+  section: string
+  instructorId: string | null
+  archived: number
 }
+
+// Because enrollments are in a separate table, I need to ask the DB for them 
+// separately when building a Course object.
+const enrollmentsStmt = db.prepare('SELECT student_id FROM enrollments WHERE course_id = ?')
+
+// This takes the ugly DB row, grabs its enrollments, and spits out a nice 
+// clean Course object that views.ts actually understands.
+function hydrate(row: CourseRow): Course {
+  const enrolled = enrollmentsStmt.all(row.id) as { student_id: string }[]
+  return {
+    id: row.id,
+    code: row.code,
+    title: row.title,
+    description: row.description,
+    capacity: row.capacity,
+    startDate: row.startDate,
+    section: row.section,
+    instructorId: row.instructorId,
+    archived: row.archived === 1, // turn 1 back into true
+    enrollments: enrolled.map((e) => e.student_id), // turn [{student_id: 'ahmed'}] into ['ahmed']
+  }
+}
+
+// Prepared statements! I learned these in class. They make queries faster 
+// and they protect against SQL injection because the values are passed separately.
+const listAllStmt = db.prepare('SELECT * FROM courses ORDER BY id')
+const listByIdStmt = db.prepare('SELECT * FROM courses WHERE id = ?')
+
+function listCourses(): Course[] {
+  const rows = listAllStmt.all() as CourseRow[]
+  return rows.map(hydrate)
+}
+
+function findCourse(id: string): Course | undefined {
+  const row = listByIdStmt.get(id) as CourseRow | undefined
+  // if the row exists, hydrate it. if not, return undefined.
+  return row ? hydrate(row) : undefined
+}
+
+// ---- Write Operations ----
 
 function createCourse(input: CourseFormInput): Course {
-    const course: Course = {
-        id: crypto.randomUUID(),   // unique forever, no collision with seed '1'/'2'
-        enrollments: [],
-        instructorId: null,
-        archived: false,
-        ...input,
-    }
-    courses.push(course)
-    return course
+  const id = crypto.randomUUID() // still using UUIDs so we don't collide with '1' or '2'
+  
+  db.prepare(`
+    INSERT INTO courses (id, code, title, description, capacity, startDate, section, instructorId, archived)
+    VALUES (?, ?, ?, ?, ?, ?, ?, NULL, 0)
+  `).run(id, input.code, input.title, input.description, input.capacity, input.startDate, input.section)
+
+  // Instead of the `!`, we just check if it exists. 
+  const newCourse = findCourse(id)
+  if (!newCourse) throw new Error('Failed to create course')
+  return newCourse
+}
+function updateCourse(id: string, input: CourseFormInput): Course | undefined {
+  if (!findCourse(id)) return undefined // if it doesn't exist, don't bother updating
+
+  // Notice how I'm NOT updating enrollments/instructorId/archived here.
+  // Those have their own routes. This is just the main form fields.
+  db.prepare(`
+    UPDATE courses
+    SET code = ?, title = ?, description = ?, capacity = ?, startDate = ?, section = ?
+    WHERE id = ?
+  `).run(input.code, input.title, input.description, input.capacity, input.startDate, input.section, id)
+  
+  return findCourse(id)
 }
 
-function updateCourse(id: string, input: CourseFormInput): Course | undefined {
-    const course = findCourse(id)
-    if (!course) return undefined
-    // Only form fields get copied — enrollments/instructor/archived are untouched.
-    Object.assign(course, input)
-    return course
-}
-// Grabs the fields out of the submitted <form> in one place, so POST /create
-// and POST /:id/edit share the exact same parsing. Also normalises the types:
-// form values are always strings, so capacity has to be converted to Number.
+// Grabs the form data. Form values are ALWAYS strings, so I have to cast capacity 
+// back to a Number.
 async function readCourseForm(request: Request): Promise<CourseFormInput> {
-    const form = await request.formData()
-    return {
-        code: String(form.get('code') ?? '').trim(),
-        title: String(form.get('title') ?? '').trim(),
-        description: String(form.get('description') ?? '').trim(),
-        capacity: Number(form.get('capacity') ?? 0),
-    }
-}
+  const form = await request.formData()
+  return {
+    code: String(form.get('code') ?? '').trim(),
+    title: String(form.get('title') ?? '').trim(),
+    description: String(form.get('description') ?? '').trim(),
+    capacity: Number(form.get('capacity') ?? 0),
+    startDate: String(form.get('startDate') ?? '').trim(),
+    section: String(form.get('section') ?? '').trim(),
+  }
+} // <--- I added this missing closing bracket here!
 
 // ---- Routes ----
 // Each route is just: call a view function with the data it needs.
@@ -135,15 +140,14 @@ export default defineModule({
 
   router: new Elysia()
     // dashboard
-    // query comes pre-parsed by Elysia — it's an object of all query-string params, 
-    // so ?archived=1 becomes { archived: '1' }, and query.archived is the string '1'
     .get('/', ({ query }) => {
       const showArchived = query.archived === '1'
-      return dashboardPage(base, courses, showArchived)
+      // Swapped `courses` for `listCourses()` so it actually fetches from the DB
+      return dashboardPage(base, listCourses(), showArchived)
     })
 
     // read-only catalog
-    .get('/catalog', () => catalogPage(base, courses))
+    .get('/catalog', () => catalogPage(base, listCourses()))
 
     // show the "create a course" form
     .get('/create', () => createPage(base))
@@ -158,7 +162,7 @@ export default defineModule({
     .get('/:id/edit', ({ params }) => {
       const course = findCourse(params.id)
       if (!course) return notFoundPage(base)
-      return editPage(base, course, instructors)   // ← keep main's version (3rd arg)
+      return editPage(base, course, instructors)
     })
 
     // handle the edit form submit
@@ -168,78 +172,88 @@ export default defineModule({
       return successPage(base, 'Course Updated Successfully!')
     })
 
-    // handle the instructor picker. An empty value means "Unassigned".  ← from main
+    // Assign instructor
     .post('/:id/assign-instructor', async ({ params, request, set }) => {
       const form = await request.formData()
       const value = String(form.get('instructorId') ?? '').trim()
-
-      const result = assignInstructor(params.id, value === '' ? null : value)
-      if (result === 'not-found') {
+      
+      const course = findCourse(params.id)
+      if (!course) {
         set.status = 404
         return notFoundPage(base)
       }
-      if (result === 'invalid-instructor') {
+
+      const target = value === '' ? null : value
+      if (target !== null && !instructors.find((i) => i.id === target)) {
         set.status = 400
         return notFoundPage(base, 'Instructor not found')
       }
+
+      // Save the instructorId (could be a string or null) to the DB
+      db.prepare('UPDATE courses SET instructorId = ? WHERE id = ?').run(target, params.id)
       return successPage(base, 'Instructor Assigned Successfully!')
     })
 
-    // enrollment page (list + per-course enroll forms)  ← from A
-    .get('/enroll', () => enrollPage(base, courses))
+    // enrollment page (list + per-course enroll forms)
+    .get('/enroll', () => enrollPage(base, listCourses()))
 
-    // handle the enroll form submit  ← from A
+    // handle the enroll form submit
     .post('/:id/enroll', async ({ params, request }) => {
+      // 1. Look up the course using the new DB helper
       const course = findCourse(params.id)
       if (!course) return notFoundPage(base)
 
       const form = await request.formData()
       const studentId = String(form.get('studentId') ?? '').trim()
 
+      // 2. Run the exact same checks as before, but now `course.enrollments` 
+      // actually comes from the DB because of the `hydrate` function.
       if (!studentId) return notFoundPage(base, 'Student ID is required')
       if (course.enrollments.includes(studentId))
         return notFoundPage(base, 'Student is already enrolled')
       if (course.enrollments.length >= course.capacity)
         return notFoundPage(base, 'Course is full')
 
-      course.enrollments.push(studentId)
+      // 3. Save it into the enrollments table instead of pushing to an array
+      db.prepare('INSERT INTO enrollments (course_id, student_id) VALUES (?, ?)').run(
+        params.id,
+        studentId,
+      )
       return successPage(base, 'Student Enrolled Successfully!')
     })
 
     // ---- Archive ----
-    // Two tiny routes so archiving and un-archiving use the same pattern.
-    // The dashboard hides archived courses by default; this toggles the flag.
-
     .post('/:id/archive', ({ params, set }) => {
       const course = findCourse(params.id)
       if (!course) {
         set.status = 404
         return notFoundPage(base)
       }
-      course.archived = true
+      // Update the boolean (0/1) in the DB
+      db.prepare('UPDATE courses SET archived = 1 WHERE id = ?').run(params.id)
       return successPage(base, `${course.code} archived`)
     })
 
     .post('/:id/unarchive', ({ params, set }) => {
       const course = findCourse(params.id)
       if (!course) {
-        set.status = 404   // Uses set.status = 404 for missing course, same pattern as assign-instructor
+        set.status = 404   
         return notFoundPage(base)
       }
-      course.archived = false
+      // Fixed: now saving the unarchive state to the DB instead of memory
+      db.prepare('UPDATE courses SET archived = 0 WHERE id = ?').run(params.id)
       return successPage(base, `${course.code} restored to active`)
     })
 
     // Serve the OpenAPI spec file so Swagger UI can fetch it.
-    .get('/openapi.yaml', () =>
-      Bun.file(`${import.meta.dir}/openapi.yaml`)
-    )
+    .get('/openapi.yaml', ({ set }) => {
+      set.headers['content-type'] = 'application/yaml'
+      return Bun.file(`${import.meta.dir}/openapi.yaml`)
+    })
 
     // Swagger UI page that renders the above spec.
-    // Modelled on Module 8's /08-notifications/docs.
     .get('/docs', () => docsPage(base))
 
-    // JSON endpoint - other modules can call this later if they need the
-    // course list (e.g. for enrollment or analytics).
-    .get('/api/courses', () => ({ courses })),
+    // JSON endpoint for other modules.
+   .get('/api/courses', () => ({ courses: listCourses() })),
 })
