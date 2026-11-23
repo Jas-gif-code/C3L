@@ -115,17 +115,21 @@ export function dashboardPage(base: string, courses: Course[], showArchived = fa
 
 // Catalog: read-only list. No edit links, no buttons. Just the courses.
 // archived courses shouldn't appear in the public catalog by default.
-export function catalogPage(base: string, courses: Course[]): string {
+export function catalogPage(base: string, courses: Course[], q = ''): string {
     const active = courses.filter((c) => !c.archived)
     const items = active
-    .map((c) => `<li><strong>${escapeHtml(c.code)}</strong> - ${escapeHtml(c.title)}</li>`)
-    .join('')
+        .map((c) => `<li><strong>${escapeHtml(c.code)}</strong> - ${escapeHtml(c.title)}</li>`)
+        .join('')
 
     return layout({
         base,
         pageTitle: 'Catalog',
         body: `
       <h1>Course Catalog</h1>
+      <form method="GET" action="${base}/catalog">
+        <input type="text" name="q" value="${escapeHtml(q)}" placeholder="Search by code or title" />
+        <button type="submit">Search</button>
+      </form>
       <ul>${items}</ul>
       <p><a href="${base}">Back to Dashboard</a></p>
     `,

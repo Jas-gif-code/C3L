@@ -14,14 +14,14 @@ import { db } from './db/database'
 // SQLite persists to disk, unlike the old in-memory array. Without this reset,
 // test 1's archive call pollutes test 14's expectations.
 beforeEach(() => {
-  db.exec('DELETE FROM enrollments; DELETE FROM courses;')
-  
-  db.prepare(`
+    db.exec('DELETE FROM enrollments; DELETE FROM courses;')
+
+    db.prepare(`
     INSERT INTO courses (id, code, title, description, capacity, startDate, section, instructorId, archived)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run('1', 'PROG2020', 'Advanced Software Development Tools', 'Learning Git, Bun, and web development.', 30, '2026-01-10', 'Section A', null, 0)
-  
-  db.prepare(`
+
+    db.prepare(`
     INSERT INTO courses (id, code, title, description, capacity, startDate, section, instructorId, archived)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run('2', 'CSCN72030', 'System Architecture', 'Designing backend systems and APIs.', 35, '2026-01-10', 'Section B', null, 0)
@@ -168,60 +168,81 @@ test('Edit page form has every course field, so saving it keeps them', async () 
 
 // Helper so I don't repeat the API-read boilerplate for every archive test.
 const getCourse = async (id: string) => {
-  const data = (await (await get('/api/courses')).json()) as {
-    courses: Array<{ id: string; archived: boolean; capacity: number; enrollments: string[] }>
-  }
-  return data.courses.find((c) => c.id === id)
+    const data = (await (await get('/api/courses')).json()) as {
+        courses: Array<{ id: string; archived: boolean; capacity: number; enrollments: string[] }>
+    }
+    return data.courses.find((c) => c.id === id)
 }
 
 test('Archiving a course sets archived=true', async () => {
-  const response = await postForm('/2/archive', {})
-  expect(response.status).toBe(200)
-  expect((await getCourse('2'))?.archived).toBe(true)
+    const response = await postForm('/2/archive', {})
+    expect(response.status).toBe(200)
+    expect((await getCourse('2'))?.archived).toBe(true)
 })
 
 test('Unarchiving a course sets archived=false', async () => {
-  await postForm('/2/archive', {})
-  const response = await postForm('/2/unarchive', {})
-  expect(response.status).toBe(200)
-  expect((await getCourse('2'))?.archived).toBe(false)
+    await postForm('/2/archive', {})
+    const response = await postForm('/2/unarchive', {})
+    expect(response.status).toBe(200)
+    expect((await getCourse('2'))?.archived).toBe(false)
 })
 
 test('Archiving an unknown course returns 404', async () => {
-  const response = await postForm('/does-not-exist/archive', {})
-  expect(response.status).toBe(404)
+    const response = await postForm('/does-not-exist/archive', {})
+    expect(response.status).toBe(404)
 })
 
 test('Archived courses are hidden from the dashboard by default', async () => {
-  await postForm('/2/archive', {})
-  const html = await (await get('/')).text()
-  // course 1 is active, course 2 is archived - only course 1 should be visible
-  expect(html).toContain('PROG2020')   // active course 1
-  expect(html).not.toContain('CSCN72030')  // archived course 2
+    await postForm('/2/archive', {})
+    const html = await (await get('/')).text()
+    // course 1 is active, course 2 is archived - only course 1 should be visible
+    expect(html).toContain('PROG2020')   // active course 1
+    expect(html).not.toContain('CSCN72030')  // archived course 2
 })
 
 test('Archived courses appear with ?archived=1', async () => {
-  await postForm('/2/archive', {})
-  const html = await (await get('/?archived=1')).text()
-  expect(html).toContain('PROG2020')   // active course 1 still shown
-  expect(html).toContain('CSCN72030')  // archived course 2 now visible
-  expect(html).toContain('ARCHIVED')   // the badge
+    await postForm('/2/archive', {})
+    const html = await (await get('/?archived=1')).text()
+    expect(html).toContain('PROG2020')   // active course 1 still shown
+    expect(html).toContain('CSCN72030')  // archived course 2 now visible
+    expect(html).toContain('ARCHIVED')   // the badge
 })
 
 test('Archived courses do not appear in the catalog', async () => {
-  await postForm('/2/archive', {})
-  const html = await (await get('/catalog')).text()
-  expect(html).not.toContain('CSCN72030')
+    await postForm('/2/archive', {})
+    const html = await (await get('/catalog')).text()
+    expect(html).not.toContain('CSCN72030')
 })
 
 test('Archiving does not delete or change enrollments', async () => {
-  // enroll a student first
-  await postForm('/1/enroll', { studentId: 'student-x' })
-  const before = await getCourse('1')
-  expect(before?.enrollments).toEqual(['student-x'])
+    // enroll a student first
+    await postForm('/1/enroll', { studentId: 'student-x' })
+    const before = await getCourse('1')
+    expect(before?.enrollments).toEqual(['student-x'])
 
-  await postForm('/1/archive', {})
-  const after = await getCourse('1')
-  expect(after?.archived).toBe(true)
-  expect(after?.enrollments).toEqual(['student-x'])   // still there
+    await postForm('/1/archive', {})
+    const after = await getCourse('1')
+    expect(after?.archived).toBe(true)
+    expect(after?.enrollments).toEqual(['student-x'])   // still there
+})
+
+// ---- Catalog search ----
+
+test('Catalog search by code', async () => {
+    // lowercase on purpose: the search is case-insensitive
+    const html = await (await get('/catalog?q=prog2020')).text()
+    expect(html).toContain('PROG2020')
+    expect(html).not.toContain('CSCN72030')
+})
+
+test('Catalog search by title', async () => {
+    const html = await (await get('/catalog?q=architecture')).text()
+    expect(html).toContain('CSCN72030')
+    expect(html).not.toContain('PROG2020')
+})
+
+test('Empty catalog search returns all courses', async () => {
+    const html = await (await get('/catalog?q=')).text()
+    expect(html).toContain('PROG2020')
+    expect(html).toContain('CSCN72030')
 })
