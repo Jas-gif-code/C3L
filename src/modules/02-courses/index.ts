@@ -147,7 +147,19 @@ export default defineModule({
     })
 
     // read-only catalog
-    .get('/catalog', () => catalogPage(base, listCourses()))
+      .get('/catalog', ({ query }) => {
+          const q = String(query.q ?? '').trim()
+          const needle = q.toLowerCase()
+          const all = listCourses()
+          const result = needle
+              ? all.filter(
+                  (c) =>
+                      c.code.toLowerCase().includes(needle) ||
+                      c.title.toLowerCase().includes(needle),
+              )
+              : all
+          return catalogPage(base, result, q)
+      })
 
     // show the "create a course" form
     .get('/create', () => createPage(base))
